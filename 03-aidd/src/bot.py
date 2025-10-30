@@ -58,6 +58,9 @@ class TelegramBot:
             }
         )
         
+        # История диалога
+        self.conversation_history = []
+        
         self._setup_handlers()
     
     def _setup_handlers(self):
@@ -67,27 +70,31 @@ class TelegramBot:
     
     async def handle_start(self, message: Message):
         """Обработчик команды /start."""
+        self.conversation_history = [{"role": "system", "content": SYSTEM_PROMPT}]
         await message.answer("Привет! Я финансовый советник. Задай мне вопрос!")
     
     async def handle_message(self, message: Message):
         """Обработчик текстовых сообщений."""
         try:
-            response_text = await self.get_llm_response(message.text)
+            # Добавляем сообщение пользователя в историю
+            self.conversation_history.append({"role": "user", "content": message.text})
+            
+            # Получаем ответ от LLM
+            response_text = await self.get_llm_response()
+            
+            # Добавляем ответ ассистента в историю
+            self.conversation_history.append({"role": "assistant", "content": response_text})
+            
             await message.answer(response_text)
         except Exception as e:
             logger.error(f"Ошибка при обработке сообщения: {e}")
             await message.answer("Извините, произошла ошибка. Попробуйте позже.")
     
-    async def get_llm_response(self, user_text: str) -> str:
+    async def get_llm_response(self) -> str:
         """Получить ответ от LLM."""
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_text}
-        ]
-        
         response = self.llm_client.chat.completions.create(
             model=self.model_name,
-            messages=messages
+            messages=self.conversation_history
         )
         
         return response.choices[0].message.content
