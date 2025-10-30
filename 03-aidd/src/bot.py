@@ -92,17 +92,24 @@ class TelegramBot:
     
     async def get_llm_response(self) -> str:
         """Получить ответ от LLM."""
-        response = self.llm_client.chat.completions.create(
-            model=self.model_name,
-            messages=self.conversation_history
-        )
-        
-        return response.choices[0].message.content
+        try:
+            response = self.llm_client.chat.completions.create(
+                model=self.model_name,
+                messages=self.conversation_history
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            logger.error(f"Ошибка запроса к LLM: {e}")
+            raise
     
     async def run(self):
         """Запуск бота."""
         logger.info("Бот запущен")
-        await self.dp.start_polling(self.bot)
+        try:
+            await self.dp.start_polling(self.bot)
+        finally:
+            await self.bot.session.close()
+            logger.info("Бот остановлен")
 
 
 def main():
@@ -111,9 +118,9 @@ def main():
         bot = TelegramBot()
         asyncio.run(bot.run())
     except KeyboardInterrupt:
-        logger.info("Бот остановлен")
+        pass
     except Exception as e:
-        logger.error(f"Ошибка при работе бота: {e}")
+        logger.error(f"Критическая ошибка бота: {e}")
 
 
 if __name__ == "__main__":
