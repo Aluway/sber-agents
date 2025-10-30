@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Telegram бот с эхо-ответами на aiogram.
+Telegram бот с LLM в роли финансового советника.
 """
 
 import asyncio
@@ -11,26 +11,53 @@ from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message
+from openai import OpenAI
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Системный промпт для финансового советника
+SYSTEM_PROMPT = """Ты — профессиональный финансовый советник. 
+Твоя задача — помогать пользователям с финансовыми вопросами, 
+планированием бюджета и накоплениями. Отвечай кратко, по делу и дружелюбно."""
+
 
 class TelegramBot:
-    """Telegram бот с эхо-ответами."""
+    """Telegram бот с LLM финансовым советником."""
     
     def __init__(self):
         """Инициализация бота."""
         load_dotenv()
-        self.bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
         
+        # Загрузка конфигурации
+        self.bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+        self.openrouter_key = os.getenv("OPENROUTER_API_KEY")
+        self.model_name = os.getenv("MODEL_NAME", "openai/gpt-3.5-turbo")
+        
+        # Проверка обязательных параметров
         if not self.bot_token:
             logger.error("TELEGRAM_BOT_TOKEN не найден в .env файле!")
             raise ValueError("Необходим TELEGRAM_BOT_TOKEN")
         
+        if not self.openrouter_key:
+            logger.error("OPENROUTER_API_KEY не найден в .env файле!")
+            raise ValueError("Необходим OPENROUTER_API_KEY")
+        
+        # Инициализация Telegram бота
         self.bot = Bot(token=self.bot_token)
         self.dp = Dispatcher()
+        
+        # Инициализация OpenAI клиента для OpenRouter
+        self.llm_client = OpenAI(
+            api_key=self.openrouter_key,
+            base_url="https://openrouter.ai/api/v1",
+            default_headers={
+                "HTTP-Referer": "https://github.com/yourusername/aidd-bot",
+                "X-Title": "AI Financial Advisor Bot"
+            }
+        )
+        
         self._setup_handlers()
     
     def _setup_handlers(self):
@@ -44,7 +71,26 @@ class TelegramBot:
     
     async def handle_message(self, message: Message):
         """Обработчик текстовых сообщений."""
-        await message.answer(message.text)
+        try:
+            response_text = await self.get_llm_response(message.text)
+            await message.answer(response_text)
+        except Exception as e:
+            logger.error(f"Ошибка при обработке сообщения: {e}")
+            await message.answer("Извините, произошла ошибка. Попробуйте позже.")
+    
+    async def get_llm_response(self, user_text: str) -> str:
+        """Получить ответ от LLM."""
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_text}
+        ]
+        
+        response = self.llm_client.chat.completions.create(
+            model=self.model_name,
+            messages=messages
+        )
+        
+        return response.choices[0].message.content
     
     async def run(self):
         """Запуск бота."""
