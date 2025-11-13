@@ -130,6 +130,10 @@ class FinanceBot:
                     transaction_data = json.loads(json_match.group(1))
                     self.add_transaction(transaction_data)
                     logger.info("Transaction extracted from LLM response")
+                    
+                    # Убираем JSON блок из ответа для пользователя
+                    assistant_message = re.sub(r'```json\s*\{.*?\}\s*```\s*', '', assistant_message, flags=re.DOTALL)
+                    assistant_message = assistant_message.strip()
                 except Exception as e:
                     logger.error(f"Failed to parse transaction JSON: {e}")
             
