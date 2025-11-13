@@ -27,3 +27,7 @@ clean:
 	@for /r . %%f in (*.log) do @del /q "%%f" 2>nul || true
 	@echo "✓ Очистка завершена"
 
+
+
+
+
