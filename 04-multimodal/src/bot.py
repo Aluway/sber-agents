@@ -50,6 +50,9 @@ class FinanceBot:
             api_key=openrouter_key
         )
         
+        # Модель LLM
+        self.llm_model = os.getenv("LLM_MODEL", "anthropic/claude-3.5-sonnet")
+        
         # История диалога
         self.chat_history = []
         
@@ -77,9 +80,9 @@ class FinanceBot:
             ] + self.chat_history
             
             # Вызов LLM
-            logger.info("Calling LLM...")
+            logger.info(f"Calling LLM ({self.llm_model})...")
             response = self.llm_client.chat.completions.create(
-                model="anthropic/claude-3.5-sonnet",
+                model=self.llm_model,
                 messages=messages
             )
             
