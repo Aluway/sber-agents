@@ -4,6 +4,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher
 from aiogram.types import Message
+from openai import OpenAI
 
 # Настройка логирования
 logging.basicConfig(
@@ -35,22 +36,77 @@ class FinanceBot:
         if not token:
             raise ValueError(f"TELEGRAM_TOKEN not found. Checked: {env_path}")
         
+        openrouter_key = os.getenv("OPENROUTER_API_KEY")
+        if not openrouter_key:
+            raise ValueError(f"OPENROUTER_API_KEY not found. Checked: {env_path}")
+        
         # Инициализация aiogram
         self.bot = Bot(token=token)
         self.dp = Dispatcher()
+        
+        # Инициализация LLM
+        self.llm_client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=openrouter_key
+        )
+        
+        # История диалога
+        self.chat_history = []
+        
+        # Системный промпт
+        self.system_prompt = """Ты - дружелюбный финансовый помощник.
+Отвечай кратко и по делу. Будь вежливым и полезным."""
         
         # Регистрация хэндлеров
         self.dp.message.register(self.handle_message)
         
         logger.info("FinanceBot initialized")
     
+    async def call_llm(self, user_message: str) -> str:
+        """Вызов LLM через OpenRouter"""
+        try:
+            # Добавляем сообщение пользователя в историю
+            self.chat_history.append({
+                "role": "user",
+                "content": user_message
+            })
+            
+            # Формируем полную историю с системным промптом
+            messages = [
+                {"role": "system", "content": self.system_prompt}
+            ] + self.chat_history
+            
+            # Вызов LLM
+            logger.info("Calling LLM...")
+            response = self.llm_client.chat.completions.create(
+                model="anthropic/claude-3.5-sonnet",
+                messages=messages
+            )
+            
+            # Получаем ответ
+            assistant_message = response.choices[0].message.content
+            logger.info("LLM call successful")
+            
+            # Добавляем ответ в историю
+            self.chat_history.append({
+                "role": "assistant",
+                "content": assistant_message
+            })
+            
+            return assistant_message
+            
+        except Exception as e:
+            logger.error(f"LLM API error: {e}")
+            return "Извините, произошла ошибка при обработке запроса."
+    
     async def handle_message(self, message: Message):
-        """Обработка текстового сообщения (эхо-бот)"""
+        """Обработка текстового сообщения"""
         logger.info(f"Message received from user {message.from_user.id}")
         
         try:
-            # Эхо-ответ
-            await message.answer(f"Вы написали: {message.text}")
+            # Вызываем LLM
+            response = await self.call_llm(message.text)
+            await message.answer(response)
         except Exception as e:
             logger.error(f"Error handling message: {e}")
             await message.answer("Произошла ошибка при обработке сообщения")
