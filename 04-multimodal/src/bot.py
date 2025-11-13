@@ -3,6 +3,7 @@ import os
 import json
 import re
 import base64
+import requests
 from pathlib import Path
 from datetime import datetime
 from dotenv import load_dotenv
@@ -73,14 +74,22 @@ class FinanceBot:
             self.vision_model = self.llm_model  # OpenRouter модели часто поддерживают vision
             self.use_local = False
         
-        # Клиент для Whisper API (транскрибация голосовых)
+        # Настройка транскрибации голосовых
+        self.whisper_local_url = os.getenv("WHISPER_LOCAL_URL")  # Локальный faster-whisper сервис
         whisper_api_key = os.getenv("WHISPER_API_KEY") or os.getenv("OPENROUTER_API_KEY")
-        if whisper_api_key:
+        
+        if self.whisper_local_url:
+            logger.info(f"Using local Whisper service at {self.whisper_local_url}")
+            self.whisper_client = None
+            self.use_local_whisper = True
+        elif whisper_api_key:
             self.whisper_client = OpenAI(api_key=whisper_api_key)
-            logger.info("Whisper API enabled for voice transcription")
+            self.use_local_whisper = False
+            logger.info("Using OpenAI Whisper API for voice transcription")
         else:
             self.whisper_client = None
-            logger.warning("Whisper API not configured - voice messages won't be processed")
+            self.use_local_whisper = False
+            logger.warning("Whisper not configured - voice messages won't be processed")
         
         # История диалога
         self.chat_history = []
@@ -266,8 +275,8 @@ class FinanceBot:
         """Обработка голосового сообщения"""
         logger.info(f"Voice message received from user {message.from_user.id}")
         
-        if not self.whisper_client:
-            await message.answer("⚠️ Транскрибация голосовых сообщений не настроена. Добавьте WHISPER_API_KEY в .env")
+        if not self.whisper_client and not self.whisper_local_url:
+            await message.answer("⚠️ Транскрибация голосовых сообщений не настроена. Добавьте WHISPER_LOCAL_URL или WHISPER_API_KEY в .env")
             return
         
         try:
@@ -279,15 +288,27 @@ class FinanceBot:
             # Информируем пользователя
             status_msg = await message.answer("🎤 Распознаю голосовое сообщение...")
             
-            # Транскрибируем через Whisper API
-            logger.info("Transcribing voice with Whisper API...")
-            transcript = self.whisper_client.audio.transcriptions.create(
-                model="whisper-1",
-                file=("voice.ogg", voice_bytes, "audio/ogg"),
-                language="ru"
-            )
+            # Транскрибируем
+            if self.use_local_whisper:
+                # Локальный faster-whisper сервис
+                logger.info("Transcribing voice with local Whisper service...")
+                response = requests.post(
+                    f"{self.whisper_local_url}/transcribe",
+                    files={"file": ("voice.ogg", voice_bytes.read(), "audio/ogg")}
+                )
+                response.raise_for_status()
+                result = response.json()
+                transcribed_text = result['text']
+            else:
+                # OpenAI Whisper API
+                logger.info("Transcribing voice with Whisper API...")
+                transcript = self.whisper_client.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=("voice.ogg", voice_bytes, "audio/ogg"),
+                    language="ru"
+                )
+                transcribed_text = transcript.text
             
-            transcribed_text = transcript.text
             logger.info(f"Transcription successful: {transcribed_text[:50]}...")
             
             # Удаляем статусное сообщение
