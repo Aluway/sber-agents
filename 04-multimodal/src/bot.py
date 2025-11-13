@@ -226,16 +226,22 @@ class FinanceBot:
             assistant_message = response.choices[0].message.content
             logger.info("Image processed successfully")
             
-            # Извлекаем транзакцию из ответа
+            # Извлекаем транзакцию из ответа (с markdown или без)
             json_match = re.search(r'```json\s*(\{.*?\})\s*```', assistant_message, re.DOTALL)
+            if not json_match:
+                # Попробуем найти JSON без markdown
+                json_match = re.search(r'\{[^{}]*"type"[^{}]*"amount"[^{}]*\}', assistant_message, re.DOTALL)
+            
             if json_match:
                 try:
-                    transaction_data = json.loads(json_match.group(1))
+                    json_str = json_match.group(1) if '```json' in assistant_message else json_match.group(0)
+                    transaction_data = json.loads(json_str)
                     self.add_transaction(transaction_data)
                     logger.info("Transaction extracted from image")
                     
-                    # Убираем JSON из ответа
+                    # Убираем JSON из ответа (оба варианта)
                     assistant_message = re.sub(r'```json\s*\{.*?\}\s*```\s*', '', assistant_message, flags=re.DOTALL)
+                    assistant_message = re.sub(r'\{[^{}]*"type"[^{}]*"amount"[^{}]*\}\s*', '', assistant_message, flags=re.DOTALL)
                     assistant_message = assistant_message.strip()
                 except Exception as e:
                     logger.error(f"Failed to parse transaction from image: {e}")
@@ -325,16 +331,22 @@ class FinanceBot:
                 # Убираем маркер и добавляем отчет
                 assistant_message = re.sub(r'\[SHOW_BALANCE\]', balance_report, assistant_message)
             
-            # Ищем JSON с транзакцией в ответе
+            # Ищем JSON с транзакцией в ответе (с markdown блоками или без)
             json_match = re.search(r'```json\s*(\{.*?\})\s*```', assistant_message, re.DOTALL)
+            if not json_match:
+                # Попробуем найти JSON без markdown
+                json_match = re.search(r'\{[^{}]*"type"[^{}]*"amount"[^{}]*\}', assistant_message, re.DOTALL)
+            
             if json_match:
                 try:
-                    transaction_data = json.loads(json_match.group(1))
+                    json_str = json_match.group(1) if '```json' in assistant_message else json_match.group(0)
+                    transaction_data = json.loads(json_str)
                     self.add_transaction(transaction_data)
                     logger.info("Transaction extracted from LLM response")
                     
-                    # Убираем JSON блок из ответа для пользователя
+                    # Убираем JSON из ответа для пользователя (оба варианта)
                     assistant_message = re.sub(r'```json\s*\{.*?\}\s*```\s*', '', assistant_message, flags=re.DOTALL)
+                    assistant_message = re.sub(r'\{[^{}]*"type"[^{}]*"amount"[^{}]*\}\s*', '', assistant_message, flags=re.DOTALL)
                     assistant_message = assistant_message.strip()
                 except Exception as e:
                     logger.error(f"Failed to parse transaction JSON: {e}")
