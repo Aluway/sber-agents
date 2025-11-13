@@ -2,11 +2,12 @@ import logging
 import os
 import json
 import re
+import base64
 from pathlib import Path
 from datetime import datetime
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher
-from aiogram.types import Message
+from aiogram.types import Message, PhotoSize
 from aiogram.filters import Command
 from openai import OpenAI
 
@@ -40,22 +41,37 @@ class FinanceBot:
         if not token:
             raise ValueError(f"TELEGRAM_TOKEN not found. Checked: {env_path}")
         
-        openrouter_key = os.getenv("OPENROUTER_API_KEY")
-        if not openrouter_key:
-            raise ValueError(f"OPENROUTER_API_KEY not found. Checked: {env_path}")
-        
         # Инициализация aiogram
         self.bot = Bot(token=token)
         self.dp = Dispatcher()
         
-        # Инициализация LLM
-        self.llm_client = OpenAI(
-            base_url="https://openrouter.ai/api/v1",
-            api_key=openrouter_key
-        )
+        # Проверяем наличие локальной Ollama
+        local_base_url = os.getenv("OPENAI_BASE_URL")
         
-        # Модель LLM
-        self.llm_model = os.getenv("LLM_MODEL", "anthropic/claude-3.5-sonnet")
+        if local_base_url:
+            # Используем локальную Ollama
+            logger.info(f"Using local Ollama at {local_base_url}")
+            self.llm_client = OpenAI(
+                base_url=local_base_url,
+                api_key=os.getenv("OPENAI_API_KEY", "ollama")
+            )
+            self.llm_model = os.getenv("MODEL_TEXT", "gpt-oss:20b")
+            self.vision_model = os.getenv("MODEL_IMAGE", "qwen3-vl:8b-instruct")
+            self.use_local = True
+        else:
+            # Используем OpenRouter
+            openrouter_key = os.getenv("OPENROUTER_API_KEY")
+            if not openrouter_key:
+                raise ValueError(f"OPENROUTER_API_KEY not found. Checked: {env_path}")
+            
+            logger.info("Using OpenRouter")
+            self.llm_client = OpenAI(
+                base_url="https://openrouter.ai/api/v1",
+                api_key=openrouter_key
+            )
+            self.llm_model = os.getenv("LLM_MODEL", "google/gemini-2.0-flash-exp:free")
+            self.vision_model = self.llm_model  # OpenRouter модели часто поддерживают vision
+            self.use_local = False
         
         # История диалога
         self.chat_history = []
@@ -97,9 +113,10 @@ class FinanceBot:
         # Регистрация хэндлеров
         self.dp.message.register(self.handle_start, Command("start"))
         self.dp.message.register(self.handle_help, Command("help"))
+        self.dp.message.register(self.handle_photo, lambda m: m.photo is not None)
         self.dp.message.register(self.handle_message)
         
-        logger.info("FinanceBot initialized")
+        logger.info(f"FinanceBot initialized (local={self.use_local}, model={self.llm_model})")
     
     def get_balance(self) -> dict:
         """Расчет баланса"""
@@ -154,6 +171,80 @@ class FinanceBot:
         
         self.transactions.append(transaction)
         logger.info(f"Transaction added: {transaction['type']} {transaction['amount']} - {transaction['category']}")
+    
+    async def handle_photo(self, message: Message):
+        """Обработка изображения (чек)"""
+        logger.info(f"Photo received from user {message.from_user.id}")
+        
+        try:
+            # Получаем самое большое фото
+            photo = message.photo[-1]
+            
+            # Скачиваем файл
+            file = await self.bot.get_file(photo.file_id)
+            file_path = file.file_path
+            
+            # Скачиваем в память
+            photo_bytes = await self.bot.download_file(file_path)
+            
+            # Кодируем в base64
+            photo_base64 = base64.b64encode(photo_bytes.read()).decode('utf-8')
+            
+            # Отправляем в vision модель
+            logger.info(f"Processing image with {self.vision_model}")
+            
+            response = self.llm_client.chat.completions.create(
+                model=self.vision_model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": """Это фото чека. Извлеки информацию о покупках и верни JSON:
+```json
+{
+  "type": "expense",
+  "amount": общая_сумма,
+  "category": "продукты" | "рестораны" | "такси" | "другое",
+  "description": "краткое описание товаров/услуг"
+}
+```
+После JSON напиши подтверждение для пользователя."""
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{photo_base64}"
+                                }
+                            }
+                        ]
+                    }
+                ]
+            )
+            
+            assistant_message = response.choices[0].message.content
+            logger.info("Image processed successfully")
+            
+            # Извлекаем транзакцию из ответа
+            json_match = re.search(r'```json\s*(\{.*?\})\s*```', assistant_message, re.DOTALL)
+            if json_match:
+                try:
+                    transaction_data = json.loads(json_match.group(1))
+                    self.add_transaction(transaction_data)
+                    logger.info("Transaction extracted from image")
+                    
+                    # Убираем JSON из ответа
+                    assistant_message = re.sub(r'```json\s*\{.*?\}\s*```\s*', '', assistant_message, flags=re.DOTALL)
+                    assistant_message = assistant_message.strip()
+                except Exception as e:
+                    logger.error(f"Failed to parse transaction from image: {e}")
+            
+            await message.answer(assistant_message)
+            
+        except Exception as e:
+            logger.error(f"Error processing photo: {e}")
+            await message.answer("Извините, не удалось обработать изображение.")
     
     async def handle_start(self, message: Message):
         """Обработка команды /start"""
