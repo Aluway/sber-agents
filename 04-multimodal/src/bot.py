@@ -1,5 +1,6 @@
 import logging
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher
 from aiogram.types import Message
@@ -17,11 +18,22 @@ class FinanceBot:
     
     def __init__(self):
         # Загрузка переменных окружения
-        load_dotenv()
+        # Ищем .env в корне проекта (на уровень выше src/)
+        env_path = Path(__file__).parent.parent / '.env'
+        
+        # Загружаем переменные
+        if env_path.exists():
+            # Читаем файл вручную и устанавливаем переменные
+            with open(env_path, 'r', encoding='utf-8-sig') as f:  # utf-8-sig убирает BOM
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#') and '=' in line:
+                        key, value = line.split('=', 1)
+                        os.environ[key.strip()] = value.strip()
         
         token = os.getenv("TELEGRAM_TOKEN")
         if not token:
-            raise ValueError("TELEGRAM_TOKEN not found in .env")
+            raise ValueError(f"TELEGRAM_TOKEN not found. Checked: {env_path}")
         
         # Инициализация aiogram
         self.bot = Bot(token=token)
