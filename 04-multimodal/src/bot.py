@@ -77,12 +77,54 @@ class FinanceBot:
 
 После JSON добавь дружелюбное подтверждение для пользователя.
 
+Когда пользователь спрашивает про баланс, отчет, или "сколько потратил/заработал", верни [SHOW_BALANCE] и объясни что сейчас покажешь отчет.
+
 Если это обычный вопрос (не о финансах), просто отвечай без JSON."""
         
         # Регистрация хэндлеров
         self.dp.message.register(self.handle_message)
         
         logger.info("FinanceBot initialized")
+    
+    def get_balance(self) -> dict:
+        """Расчет баланса"""
+        total_income = sum(t['amount'] for t in self.transactions if t['type'] == 'income')
+        total_expense = sum(t['amount'] for t in self.transactions if t['type'] == 'expense')
+        balance = total_income - total_expense
+        
+        # Группировка по категориям
+        categories = {}
+        for t in self.transactions:
+            cat = t['category']
+            if cat not in categories:
+                categories[cat] = {'income': 0, 'expense': 0}
+            categories[cat][t['type']] += t['amount']
+        
+        return {
+            'balance': balance,
+            'total_income': total_income,
+            'total_expense': total_expense,
+            'categories': categories,
+            'transactions_count': len(self.transactions)
+        }
+    
+    def format_balance_report(self) -> str:
+        """Форматирование отчета о балансе"""
+        stats = self.get_balance()
+        
+        report = f"💰 **Финансовый отчет**\n\n"
+        report += f"📊 Баланс: **{stats['balance']:,.0f}₽**\n"
+        report += f"📈 Доходы: {stats['total_income']:,.0f}₽\n"
+        report += f"📉 Расходы: {stats['total_expense']:,.0f}₽\n"
+        report += f"📝 Транзакций: {stats['transactions_count']}\n"
+        
+        if stats['categories']:
+            report += f"\n**По категориям:**\n"
+            for cat, amounts in stats['categories'].items():
+                if amounts['expense'] > 0:
+                    report += f"• {cat}: {amounts['expense']:,.0f}₽\n"
+        
+        return report
     
     def add_transaction(self, transaction_data: dict):
         """Добавление транзакции в таблицу"""
@@ -122,6 +164,13 @@ class FinanceBot:
             # Получаем ответ
             assistant_message = response.choices[0].message.content
             logger.info("LLM call successful")
+            
+            # Проверяем запрос баланса
+            if '[SHOW_BALANCE]' in assistant_message:
+                logger.info("Balance request detected")
+                balance_report = self.format_balance_report()
+                # Убираем маркер и добавляем отчет
+                assistant_message = re.sub(r'\[SHOW_BALANCE\]', balance_report, assistant_message)
             
             # Ищем JSON с транзакцией в ответе
             json_match = re.search(r'```json\s*(\{.*?\})\s*```', assistant_message, re.DOTALL)
