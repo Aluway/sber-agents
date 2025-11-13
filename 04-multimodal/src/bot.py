@@ -73,6 +73,15 @@ class FinanceBot:
             self.vision_model = self.llm_model  # OpenRouter модели часто поддерживают vision
             self.use_local = False
         
+        # Клиент для Whisper API (транскрибация голосовых)
+        whisper_api_key = os.getenv("WHISPER_API_KEY") or os.getenv("OPENROUTER_API_KEY")
+        if whisper_api_key:
+            self.whisper_client = OpenAI(api_key=whisper_api_key)
+            logger.info("Whisper API enabled for voice transcription")
+        else:
+            self.whisper_client = None
+            logger.warning("Whisper API not configured - voice messages won't be processed")
+        
         # История диалога
         self.chat_history = []
         
@@ -114,6 +123,7 @@ class FinanceBot:
         self.dp.message.register(self.handle_start, Command("start"))
         self.dp.message.register(self.handle_help, Command("help"))
         self.dp.message.register(self.handle_photo, lambda m: m.photo is not None)
+        self.dp.message.register(self.handle_voice, lambda m: m.voice is not None)
         self.dp.message.register(self.handle_message)
         
         logger.info(f"FinanceBot initialized (local={self.use_local}, model={self.llm_model})")
@@ -252,17 +262,61 @@ class FinanceBot:
             logger.error(f"Error processing photo: {e}")
             await message.answer("Извините, не удалось обработать изображение.")
     
+    async def handle_voice(self, message: Message):
+        """Обработка голосового сообщения"""
+        logger.info(f"Voice message received from user {message.from_user.id}")
+        
+        if not self.whisper_client:
+            await message.answer("⚠️ Транскрибация голосовых сообщений не настроена. Добавьте WHISPER_API_KEY в .env")
+            return
+        
+        try:
+            # Скачиваем голосовое сообщение
+            voice = message.voice
+            file = await self.bot.get_file(voice.file_id)
+            voice_bytes = await self.bot.download_file(file.file_path)
+            
+            # Информируем пользователя
+            status_msg = await message.answer("🎤 Распознаю голосовое сообщение...")
+            
+            # Транскрибируем через Whisper API
+            logger.info("Transcribing voice with Whisper API...")
+            transcript = self.whisper_client.audio.transcriptions.create(
+                model="whisper-1",
+                file=("voice.ogg", voice_bytes, "audio/ogg"),
+                language="ru"
+            )
+            
+            transcribed_text = transcript.text
+            logger.info(f"Transcription successful: {transcribed_text[:50]}...")
+            
+            # Удаляем статусное сообщение
+            await status_msg.delete()
+            
+            # Обрабатываем транскрипцию как текстовое сообщение
+            response = await self.call_llm(transcribed_text)
+            
+            # Отправляем ответ с транскрипцией
+            await message.answer(f"🎤 _Распознано:_ {transcribed_text}\n\n{response}", parse_mode="Markdown")
+            
+        except Exception as e:
+            logger.error(f"Error processing voice: {e}")
+            await message.answer("Извините, не удалось распознать голосовое сообщение.")
+    
     async def handle_start(self, message: Message):
         """Обработка команды /start"""
         welcome = """👋 Привет! Я твой финансовый помощник!
 
 Я помогу тебе вести учет доходов и расходов.
 
-🔹 Просто пиши мне о своих тратах:
+🔹 Пиши мне о тратах:
    "Купил продукты на 2500"
    
 🔹 Или о доходах:
    "Получил зарплату 100000"
+
+🎤 Записывай голосовые сообщения
+📸 Отправляй фото чеков
    
 🔹 Запрашивай баланс:
    "Покажи мой баланс"
@@ -276,7 +330,7 @@ class FinanceBot:
         """Обработка команды /help"""
         help_text = """📖 **Инструкция по использованию**
 
-**Добавление расходов:**
+**Добавление расходов (текст):**
 • Купил продукты на 2500
 • Поужинал в ресторане за 3000
 • Заплатил за такси 500
@@ -285,6 +339,13 @@ class FinanceBot:
 **Добавление доходов:**
 • Получил зарплату 100000
 • Продал телефон за 15000
+
+**Голосовые сообщения:** 🎤
+• Записывай голосом - я распознаю и обработаю!
+• "Сегодня потратил три тысячи на ужин"
+
+**Фото чеков:** 📸
+• Отправь фото чека - я извлеку данные о покупках
 
 **Просмотр баланса:**
 • Покажи баланс
